@@ -850,7 +850,7 @@ class RNNOp {
       }
       DType* work_cpu_space = static_cast<DType*>(temp_cpu_space_.data().dptr_);
 
-      if (ctx.is_train) {
+      if (1) {
         // allocate reserve space
 
         const size_t r_size = GetRNNReserveSpaceSize(param_.num_layers, direction,
