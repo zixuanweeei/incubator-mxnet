@@ -726,6 +726,16 @@ The definition of GRU here is slightly different from paper but compatible with 
   const RNNParam& params = nnvm::get<RNNParam>(attrs.parsed);
   return ListArguments(params);
 })
+.set_attr<nnvm::FListOutputNames>("FListOutputNames", [](const NodeAttrs& attrs) {
+  const RNNParam& params = nnvm::get<RNNParam>(attrs.parsed);
+  std::vector<std::string> names{"output"};
+  if (params.state_outputs) {
+    names.push_back("state_output");
+    if (params.mode == rnn_enum::kLstm)
+      names.push_back("statecell_output");
+  }
+  return names;
+})
 .set_attr<mxnet::FInferShape>("FInferShape", RNNShape)
 .set_attr<nnvm::FInferType>("FInferType", RNNType)
 .set_attr<FInferStorageType>("FInferStorageType", RNNStorageType)

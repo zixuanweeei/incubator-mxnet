@@ -434,7 +434,7 @@ int num_lstm_layer = 3;
 int num_hidden = 512;
 mx_float dropout = 0.2;
 void train(const std::string file, int batch_size, int max_epoch, int start_epoch) {
-  Context device(DeviceType::kGPU, 0);
+  Context device(DeviceType::kCPU, 0);
   BucketSentenceIter dataIter(file, batch_size, device);
   std::string prefix = file.substr(0, file.rfind("."));
   dataIter.saveCharIndices(prefix + ".dictionary");
@@ -525,7 +525,7 @@ class RNNXavier : public Xavier {
 };
 
 void trainWithBuiltInRNNOp(const std::string file, int batch_size, int max_epoch, int start_epoch) {
-  Context device(DeviceType::kGPU, 0);
+  Context device(DeviceType::kCPU, 0);
   BucketSentenceIter dataIter(file, batch_size, device);
   std::string prefix = file.substr(0, file.rfind("."));
   dataIter.saveCharIndices(prefix + ".dictionary");
@@ -589,7 +589,7 @@ void trainWithBuiltInRNNOp(const std::string file, int batch_size, int max_epoch
 
 void predict(std::wstring* ptext, int sequence_length, const std::string param_file,
     const std::string dictionary_file) {
-  Context device(DeviceType::kGPU, 0);
+  Context device(DeviceType::kCPU, 0);
   auto results = BucketSentenceIter::loadCharIndices(dictionary_file);
   auto dictionary = std::get<0>(results);
   auto charIndices = std::get<1>(results);
@@ -653,7 +653,7 @@ void predict(std::wstring* ptext, int sequence_length, const std::string param_f
 
 void predictWithBuiltInRNNOp(std::wstring* ptext, int sequence_length, const std::string param_file,
   const std::string dictionary_file) {
-  Context device(DeviceType::kGPU, 0);
+  Context device(DeviceType::kCPU, 0);
   auto results = BucketSentenceIter::loadCharIndices(dictionary_file);
   auto dictionary = std::get<0>(results);
   auto charIndices = std::get<1>(results);
