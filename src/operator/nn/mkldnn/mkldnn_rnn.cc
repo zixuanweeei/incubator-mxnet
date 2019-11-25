@@ -37,6 +37,7 @@ inline int GetRnnGatesNum(int mode) {
     case rnn_enum::kLstm:
       return 4;
     case rnn_enum::kGru:
+    case rnn_enum::kVanillaGru:
       return 3;
     case rnn_enum::kRnnRelu:
     case rnn_enum::kRnnTanh:
@@ -178,6 +179,11 @@ RnnPrimitive GetRnnFwdPrim(
           src_layer_desc, src_state_desc, weight_layer_desc,
           weight_iter_desc, bias_desc, dst_layer_desc, dst_state_desc);
       break;
+    case rnn_enum::kVanillaGru:
+      fwd = RnnPrimitive::Create<gru_forward>(prop, mkldnn_rnn_direction,
+          src_layer_desc, src_state_desc, weight_layer_desc,
+          weight_iter_desc, bias_desc, dst_layer_desc, dst_state_desc);
+      break;
     case rnn_enum::kRnnRelu:
     case rnn_enum::kRnnTanh:
       fwd = RnnPrimitive::Create<vanilla_rnn_forward>(prop,
@@ -234,6 +240,18 @@ RnnBwdPrimitive GetRnnBwdPrim(const MKLDNNRnnForwardTraining &fwd,
       const lbr_gru_forward::primitive_desc* pd =
           reinterpret_cast<const lbr_gru_forward::primitive_desc*>(fwd_pd);
       bwd = RnnBwdPrimitive::Create<lbr_gru_forward, lbr_gru_backward>(*pd,
+          prop, mkldnn_rnn_direction,
+          // data desc
+          src_layer_desc, src_state_desc, weight_layer_desc,
+          weight_iter_desc, bias_desc, dst_layer_desc, dst_state_desc,
+          // diff desc
+          src_layer_desc, src_state_desc, weight_layer_desc,
+          weight_iter_desc, bias_desc, dst_layer_desc, dst_state_desc);
+    } break;
+    case rnn_enum::kVanillaGru: {
+      const gru_forward::primitive_desc* desc =
+          reinterpret_cast<const gru_forward::primitive_desc*>(fwd_pd);
+      bwd = RnnBwdPrimitive::Create<gru_forward, gru_backward>(*desc,
           prop, mkldnn_rnn_direction,
           // data desc
           src_layer_desc, src_state_desc, weight_layer_desc,
@@ -438,7 +456,20 @@ void FuseBias(DType* fuse_bias, DType* native_bias,
       fuse_bias[j + 2 * state_size] = bx[j + 2 * state_size];
       fuse_bias[j + 3 * state_size] = bh[j + 2 * state_size];
     }
-  } else {
+  } else if (mode == rnn_enum::kVanillaGru) {
+    // While mxnet gru gate order is reset, update and new gates,
+    // mkldnn gru gate order is update, reset and new gates. So
+    // we need to swap the order of reset and update from mxnet.
+    #pragma omp parallel for num_threads(omp_threads)
+    for (int j = 0; j < state_size_; j++) {
+      // Swap summed reset, update bias
+      fuse_bias[j + state_size] = bx[j] + bh[j];
+      fuse_bias[j] = bx[j + state_size] + bh[j + state_size];
+
+      // Memcpy two new gates
+      fuse_bias[j + 2 * state_size] = bx[j + 2 * state_size] + bh[j + 2 * state_size];
+    }
+  }else {
     #pragma omp parallel for num_threads(omp_threads)
     for (int j = 0; j < single_b_sz; ++j) {
       // Sum two bias
@@ -537,7 +568,7 @@ void MKLDNNRnnForward::SetWeightsMem(MKLDNNRnnMemMgr* mgr, void *w_ptr, void *b_
   // Adjust gates order of LBR-GRU among concatenated memory inplace.
   char* fused_wx = static_cast<char*>(weights_layer_r_->get_data_handle());
   char* fused_wh = static_cast<char*>(weights_iter_r_->get_data_handle());
-  if (param_.mode == rnn_enum::kGru) {
+  if (param_.mode == rnn_enum::kGru || param_.mode == rnn_enum::kVanillaGru) {
     for (size_t lyr = 0; lyr < static_cast<size_t>(param_.num_layer); ++lyr) {
       for (size_t d = 0; d < param_.bidirectional + 1U; ++d) {
         AdjustGruGateOrder(fused_wx, param_.input_size, param_.state_size, dtype);

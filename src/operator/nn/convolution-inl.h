@@ -53,6 +53,7 @@ enum ConvolutionOpInputs {kData, kWeight, kBias};
 enum ConvolutionOpOutputs {kOut};
 enum ConvolutionOpResource {kTempSpace};
 enum ConvolutionOpCudnnTune {kOff, kLimited, kFastest};
+enum ConvolutionPaddingConvention {kExplicit, kSame, kValid};
 }
 
 struct ConvolutionParam : public dmlc::Parameter<ConvolutionParam> {
@@ -67,6 +68,7 @@ struct ConvolutionParam : public dmlc::Parameter<ConvolutionParam> {
   dmlc::optional<int> cudnn_tune;
   bool cudnn_off;
   dmlc::optional<int> layout;
+  int padding_convention;
   DMLC_DECLARE_PARAMETER(ConvolutionParam) {
     DMLC_DECLARE_FIELD(kernel).describe("Convolution kernel size: (w,), (h, w) or (d, h, w)");
     DMLC_DECLARE_FIELD(stride).set_default(mxnet::TShape(0, 0))
@@ -105,6 +107,14 @@ struct ConvolutionParam : public dmlc::Parameter<ConvolutionParam> {
     .describe("Set layout for input, output and weight. Empty for\n    "
               "default layout: NCW for 1d, NCHW for 2d and NCDHW for 3d."
               "NHWC and NDHWC are only supported on GPU.");
+    DMLC_DECLARE_FIELD(padding_convention)
+    .add_enum("EXPLICIT", conv::ConvolutionPaddingConvention::kExplicit)
+    .add_enum("SAME", conv::ConvolutionPaddingConvention::kSame)
+    .add_enum("VALID", conv::ConvolutionPaddingConvention::kValid)
+    .set_default(conv::ConvolutionPaddingConvention::kExplicit)
+    .describe("Set padding convention for convolution. EXPLICIT for explicitly using "
+              "parameter pad. SAME or VALID enable the operator to infer the padding "
+              "width upon the corresponding convention.");
   }
   // Adjusts kernel size for effects of dilation in the dimension `dim`.
   index_t DilatedKernelSize(int dim) const {

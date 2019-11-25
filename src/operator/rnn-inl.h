@@ -53,7 +53,7 @@ namespace op {
 namespace rnn_enum {
   enum RNNOpInputs {kData, kParams, kState, kStateCell, kSequenceLength};
   enum RNNOpOutputs {kOut, kStateOut, kStateCellOut};
-  enum RNNModeType {kRnnRelu, kRnnTanh, kLstm, kGru};
+  enum RNNModeType {kRnnRelu, kRnnTanh, kLstm, kGru, kVanillaGru};
   enum RNNOpResource {kTempSpace, kCuDNNDropoutDescSpace};
 }
 
@@ -85,6 +85,7 @@ struct RNNParam : public dmlc::Parameter<RNNParam> {
     .add_enum("rnn_tanh", rnn_enum::kRnnTanh)
     .add_enum("lstm", rnn_enum::kLstm)
     .add_enum("gru", rnn_enum::kGru)
+    .add_enum("vanilla_gru", rnn_enum::kVanillaGru)
     .describe("the type of RNN to compute");
 
     DMLC_DECLARE_FIELD(p).set_default(0.)
@@ -137,6 +138,7 @@ inline index_t GetRnnParamSize(int num_layer,
       size *= 4;
       break;
     case rnn_enum::kGru:
+    case rnn_enum::kVanillaGru:
       size *= 3;
       break;
   }
@@ -167,6 +169,7 @@ inline int GetRnnBiasSize(int num_layer,
       size *= 4;
       break;
     case rnn_enum::kGru:
+    case rnn_enum::kVanillaGru:
       size *= 3;
       break;
   }

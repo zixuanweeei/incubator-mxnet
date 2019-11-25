@@ -62,21 +62,52 @@ std::shared_ptr<mkldnn::convolution_forward::primitive_desc> GetConvFwdImpl(
   auto bias_md_ptr = bias ? &bias_md : nullptr;
 
   mkldnn::memory::dims strides(param.conv_param.kernel.ndim());
-  mkldnn::memory::dims padding(param.conv_param.kernel.ndim());
+  mkldnn::memory::dims padding_l(param.conv_param.kernel.ndim(), 0);
+  mkldnn::memory::dims padding_r(param.conv_param.kernel.ndim(), 0);
   if (param.conv_param.kernel.ndim() == 1) {
     CHECK_GE(param.conv_param.stride.ndim(), 1);
     CHECK_GE(param.conv_param.pad.ndim(), 1);
     CHECK_GE(param.conv_param.dilate.ndim(), 1);
     strides[0] = param.conv_param.stride[0];
-    padding[0] = param.conv_param.pad[0];
+    if (param.conv_param.padding_convention == conv::ConvolutionPaddingConvention::kExplicit) {
+      padding_l[0] = param.conv_param.pad[0];
+      padding_r[0] = param.conv_param.pad[0];
+    } else if (param.conv_param.padding_convention == conv::ConvolutionPaddingConvention::kSame) {
+      int padding = param.conv_param.kernel[0] - param.conv_param.stride[0];
+      if (padding > 0) {
+        padding_l[0] = padding / 2;
+        padding_r[0] = padding % 2 ? padding / 2 + 1 : padding / 2;
+      }
+    } else if (param.conv_param.padding_convention == conv::ConvolutionPaddingConvention::kValid) {
+      padding_l[0] = 0;
+      padding_r[0] = 0;
+    }
   } else if (param.conv_param.kernel.ndim() == 2) {
     CHECK_GE(param.conv_param.stride.ndim(), 2);
     CHECK_GE(param.conv_param.pad.ndim(), 2);
     CHECK_GE(param.conv_param.dilate.ndim(), 2);
     strides[0] = param.conv_param.stride[0];
     strides[1] = param.conv_param.stride[1];
-    padding[0] = param.conv_param.pad[0];
-    padding[1] = param.conv_param.pad[1];
+    if (param.conv_param.padding_convention == conv::ConvolutionPaddingConvention::kExplicit) {
+      padding_l[0] = param.conv_param.pad[0];
+      padding_l[1] = param.conv_param.pad[1];
+      padding_r[0] = param.conv_param.pad[0];
+      padding_r[1] = param.conv_param.pad[1];
+    } else if (param.conv_param.padding_convention == conv::ConvolutionPaddingConvention::kSame) {
+      int padding0 = param.conv_param.kernel[0] - param.conv_param.stride[0];
+      int padding1 = param.conv_param.kernel[1] - param.conv_param.stride[1];
+      if (padding0 > 0) {
+        padding_l[0] = padding0 / 2;
+        padding_r[0] = padding0 % 2 ? padding0 / 2 + 1 : padding0 / 2;
+      }
+      if (padding1 > 0) {
+        padding_l[1] = padding1 / 2;
+        padding_r[1] = padding1 % 2 ? padding1 / 2 + 1 : padding1 / 2;
+      }
+    } else if (param.conv_param.padding_convention == conv::ConvolutionPaddingConvention::kValid) {
+      padding_l[0] = 0; padding_l[1] = 0;
+      padding_r[0] = 0; padding_r[1] = 0;
+    }
   } else {
     LOG(FATAL) << "Unexpected MKL-DNN Conv kernel size "
                << param.conv_param.kernel.ndim() << ", supporting only 1 or 2.";
@@ -127,12 +158,12 @@ std::shared_ptr<mkldnn::convolution_forward::primitive_desc> GetConvFwdImpl(
 
   if (param.conv_param.dilate.ndim() == 0 && bias_md_ptr == nullptr) {
     mkldnn::convolution_forward::desc desc(prop, mkldnn::algorithm::convolution_direct, data_md,
-                                           weight_md, out_md, strides, padding, padding);
+                                           weight_md, out_md, strides, padding_l, padding_r);
     return GetConvFwdPd(desc);
   } else if (param.conv_param.dilate.ndim() == 0) {
     mkldnn::convolution_forward::desc desc(prop, mkldnn::algorithm::convolution_direct, data_md,
-                                           weight_md, *bias_md_ptr, out_md, strides, padding,
-                                           padding);
+                                           weight_md, *bias_md_ptr, out_md, strides, padding_l,
+                                           padding_r);
     return GetConvFwdPd(desc);
   } else {
     mkldnn::memory::dims dilates(param.conv_param.kernel.ndim());
@@ -147,12 +178,13 @@ std::shared_ptr<mkldnn::convolution_forward::primitive_desc> GetConvFwdImpl(
     }
     if (bias_md_ptr == nullptr) {
       mkldnn::convolution_forward::desc desc(prop, mkldnn::algorithm::convolution_direct, data_md,
-                                             weight_md, out_md, strides, dilates, padding, padding);
+                                             weight_md, out_md, strides, dilates, padding_l,
+                                             padding_r);
       return GetConvFwdPd(desc);
     } else {
       mkldnn::convolution_forward::desc desc(prop, mkldnn::algorithm::convolution_direct, data_md,
                                              weight_md, *bias_md_ptr, out_md, strides, dilates,
-                                             padding, padding);
+                                             padding_l, padding_r);
       return GetConvFwdPd(desc);
     }
   }
@@ -166,21 +198,51 @@ static std::shared_ptr<mkldnn::convolution_backward_data::primitive_desc> GetCon
   auto out_md = GetMemDesc(output);
   auto engine = CpuEngine::Get()->get_engine();
   mkldnn::memory::dims strides(param.kernel.ndim());
-  mkldnn::memory::dims padding(param.kernel.ndim());
+  mkldnn::memory::dims padding_l(param.kernel.ndim(), 0);
+  mkldnn::memory::dims padding_r(param.kernel.ndim(), 0);
   if (param.kernel.ndim() == 1) {
     CHECK_GE(param.stride.ndim(), 1);
     CHECK_GE(param.pad.ndim(), 1);
     CHECK_GE(param.dilate.ndim(), 1);
     strides[0] = param.stride[0];
-    padding[0] = param.pad[0];
+    if (param.padding_convention == conv::ConvolutionPaddingConvention::kExplicit) {
+      padding_l[0] = param.pad[0];
+      padding_r[0] = param.pad[0];
+    } else if (param.padding_convention == conv::ConvolutionPaddingConvention::kSame
+               && param.kernel[0] > 2) {
+      int padding = param.kernel[0] - param.stride[0];
+      padding_l[0] = padding / 2;
+      padding_r[0] = padding % 2 ? padding / 2 + 1 : padding / 2;
+    } else if (param.padding_convention == conv::ConvolutionPaddingConvention::kValid) {
+      padding_l[0] = 0;
+      padding_r[0] = 0;
+    }
   } else if (param.kernel.ndim() == 2) {
     CHECK_GE(param.stride.ndim(), 2);
     CHECK_GE(param.pad.ndim(), 2);
     CHECK_GE(param.dilate.ndim(), 2);
     strides[0] = param.stride[0];
     strides[1] = param.stride[1];
-    padding[0] = param.pad[0];
-    padding[1] = param.pad[1];
+    if (param.padding_convention == conv::ConvolutionPaddingConvention::kExplicit) {
+      padding_l[0] = param.pad[0];
+      padding_l[1] = param.pad[1];
+      padding_r[0] = param.pad[0];
+      padding_r[1] = param.pad[1];
+    } else if (param.padding_convention == conv::ConvolutionPaddingConvention::kSame) {
+      int padding0 = param.kernel[0] - param.stride[0];
+      int padding1 = param.kernel[1] - param.stride[1];
+      if (param.kernel[0] > 2) {
+        padding_l[0] = padding0 / 2;
+        padding_r[0] = padding0 % 2 ? padding0 / 2 + 1 : padding0 / 2;
+      }
+      if (param.kernel[1] > 2) {
+        padding_l[1] = padding1 / 2;
+        padding_r[1] = padding1 % 2 ? padding1 / 2 + 1 : padding1 / 2;
+      }
+    } else if (param.padding_convention == conv::ConvolutionPaddingConvention::kValid) {
+      padding_l[0] = 0; padding_l[1] = 0;
+      padding_r[0] = 0; padding_r[1] = 0;
+    }
   } else {
     LOG(FATAL) << "Unexpected MKL-DNN Conv kernel size " << param.kernel.ndim()
                << ", supporting only 1 or 2.";
@@ -207,7 +269,7 @@ static std::shared_ptr<mkldnn::convolution_backward_data::primitive_desc> GetCon
 
   if (param.dilate.ndim() == 0) {
     mkldnn::convolution_backward_data::desc desc(mkldnn::algorithm::convolution_direct, data_md,
-                                                 weight_md, out_md, strides, padding, padding);
+                                                 weight_md, out_md, strides, padding_l, padding_r);
     return GetConvBwdDataPd(desc);
   } else {
     mkldnn::memory::dims dilates(param.kernel.ndim());
@@ -221,8 +283,8 @@ static std::shared_ptr<mkldnn::convolution_backward_data::primitive_desc> GetCon
                  << param.dilate.ndim() << ", supporting only 1 or 2.";
     }
     mkldnn::convolution_backward_data::desc desc(mkldnn::algorithm::convolution_direct, data_md,
-                                                 weight_md, out_md, strides, dilates, padding,
-                                                 padding);
+                                                 weight_md, out_md, strides, dilates, padding_l,
+                                                 padding_r);
     return GetConvBwdDataPd(desc);
   }
 }
@@ -235,21 +297,52 @@ static std::shared_ptr<mkldnn::convolution_backward_weights::primitive_desc> Get
   auto out_md = GetMemDesc(output);
   auto engine = CpuEngine::Get()->get_engine();
   mkldnn::memory::dims strides(param.kernel.ndim());
-  mkldnn::memory::dims padding(param.kernel.ndim());
+  mkldnn::memory::dims padding_l(param.kernel.ndim(), 0);
+  mkldnn::memory::dims padding_r(param.kernel.ndim(), 0);
   if (param.kernel.ndim() == 1) {
     CHECK_GE(param.stride.ndim(), 1);
     CHECK_GE(param.pad.ndim(), 1);
     CHECK_GE(param.dilate.ndim(), 1);
     strides[0] = param.stride[0];
-    padding[0] = param.pad[0];
+    strides[0] = param.stride[0];
+    if (param.padding_convention == conv::ConvolutionPaddingConvention::kExplicit) {
+      padding_l[0] = param.pad[0];
+      padding_r[0] = param.pad[0];
+    } else if (param.padding_convention == conv::ConvolutionPaddingConvention::kSame
+               && param.kernel[0] > 2) {
+      int padding = param.kernel[0] - param.stride[0];
+      padding_l[0] = padding / 2;
+      padding_r[0] = padding % 2 ? padding / 2 + 1 : padding / 2;
+    } else if (param.padding_convention == conv::ConvolutionPaddingConvention::kValid) {
+      padding_l[0] = 0;
+      padding_r[0] = 0;
+    }
   } else if (param.kernel.ndim() == 2) {
     CHECK_GE(param.stride.ndim(), 2);
     CHECK_GE(param.pad.ndim(), 2);
     CHECK_GE(param.dilate.ndim(), 2);
     strides[0] = param.stride[0];
     strides[1] = param.stride[1];
-    padding[0] = param.pad[0];
-    padding[1] = param.pad[1];
+    if (param.padding_convention == conv::ConvolutionPaddingConvention::kExplicit) {
+      padding_l[0] = param.pad[0];
+      padding_l[1] = param.pad[1];
+      padding_r[0] = param.pad[0];
+      padding_r[1] = param.pad[1];
+    } else if (param.padding_convention == conv::ConvolutionPaddingConvention::kSame) {
+      int padding0 = param.kernel[0] - param.stride[0];
+      int padding1 = param.kernel[1] - param.stride[1];
+      if (param.kernel[0] > 2) {
+        padding_l[0] = padding0 / 2;
+        padding_r[0] = padding0 % 2 ? padding0 / 2 + 1 : padding0 / 2;
+      }
+      if (param.kernel[1] > 2) {
+        padding_l[1] = padding1 / 2;
+        padding_r[1] = padding1 % 2 ? padding1 / 2 + 1 : padding1 / 2;
+      }
+    } else if (param.padding_convention == conv::ConvolutionPaddingConvention::kValid) {
+      padding_l[0] = 0; padding_l[1] = 0;
+      padding_r[0] = 0; padding_r[1] = 0;
+    }
   } else {
     LOG(FATAL) << "Unexpected MKL-DNN Conv kernel size " << param.kernel.ndim()
                << ", supporting only 1 or 2.";
@@ -276,13 +369,14 @@ static std::shared_ptr<mkldnn::convolution_backward_weights::primitive_desc> Get
 
   if (param.dilate.ndim() == 0 && bias == nullptr) {
     mkldnn::convolution_backward_weights::desc desc(mkldnn::algorithm::convolution_direct, data_md,
-                                                    weight_md, out_md, strides, padding, padding);
+                                                    weight_md, out_md, strides, padding_l,
+                                                    padding_r);
     return GetConvBwdWeightsPd(desc);
   } else if (param.dilate.ndim() == 0) {
     auto bias_md = GetMemDesc(*bias);
     mkldnn::convolution_backward_weights::desc desc(mkldnn::algorithm::convolution_direct, data_md,
-                                                    weight_md, bias_md, out_md, strides, padding,
-                                                    padding);
+                                                    weight_md, bias_md, out_md, strides, padding_l,
+                                                    padding_r);
     return GetConvBwdWeightsPd(desc);
   } else {
     mkldnn::memory::dims dilates(param.kernel.ndim());
@@ -298,13 +392,13 @@ static std::shared_ptr<mkldnn::convolution_backward_weights::primitive_desc> Get
     if (bias == nullptr) {
       mkldnn::convolution_backward_weights::desc desc(mkldnn::algorithm::convolution_direct,
                                                       data_md, weight_md, out_md, strides, dilates,
-                                                      padding, padding);
+                                                      padding_l, padding_r);
       return GetConvBwdWeightsPd(desc);
     } else {
       auto bias_md = GetMemDesc(*bias);
       mkldnn::convolution_backward_weights::desc desc(mkldnn::algorithm::convolution_direct,
                                                       data_md, weight_md, bias_md, out_md, strides,
-                                                      dilates, padding, padding);
+                                                      dilates, padding_l, padding_r);
       return GetConvBwdWeightsPd(desc);
     }
   }

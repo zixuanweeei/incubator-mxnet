@@ -22,7 +22,7 @@
 """Definition of various recurrent neural network layers."""
 import re
 
-__all__ = ['RNN', 'LSTM', 'GRU']
+__all__ = ['RNN', 'LSTM', 'GRU', 'VanillaGRU']
 
 from ... import ndarray, symbol
 from .. import HybridBlock, tensor_types
@@ -61,7 +61,7 @@ class _RNNLayer(HybridBlock):
         self._dtype = dtype
         self._use_sequence_length = use_sequence_length
 
-        self._gates = {'rnn_relu': 1, 'rnn_tanh': 1, 'lstm': 4, 'gru': 3}[mode]
+        self._gates = {'rnn_relu': 1, 'rnn_tanh': 1, 'lstm': 4, 'gru': 3, 'vanilla_gru': 3}[mode]
 
         ng, ni, nh = self._gates, input_size, hidden_size
         if not projection_size:
@@ -81,6 +81,8 @@ class _RNNLayer(HybridBlock):
                                          init=h2h_bias_initializer, dtype=dtype)
                 ni = nh * self._dir
         else:
+            if mode == 'vanilla_gru':
+                raise RuntimeError("Currently, vanilla_gru doesn't support projection.")
             np = self._projection_size
             for i in range(num_layers):
                 for j in ['l', 'r'][:self._dir]:
@@ -157,6 +159,8 @@ class _RNNLayer(HybridBlock):
                     'lstm': lambda **kwargs: rnn_cell.LSTMCell(self._hidden_size,
                                                                **kwargs),
                     'gru': lambda **kwargs: rnn_cell.GRUCell(self._hidden_size,
+                                                             **kwargs),
+                    'vanilla_gru': lambda **kwargs: rnn_cell.VanillaGRUCell(self._hidden_size,
                                                              **kwargs)}[self._mode]
 
         stack = rnn_cell.HybridSequentialRNNCell(prefix=self.prefix, params=self.params)
@@ -627,6 +631,107 @@ class GRU(_RNNLayer):
                                   i2h_bias_initializer, h2h_bias_initializer,
                                   'gru', None, None, None, None, False,
                                   dtype, **kwargs)
+
+    def state_info(self, batch_size=0):
+        return [{'shape': (self._num_layers * self._dir, batch_size, self._hidden_size),
+                 '__layout__': 'LNC', 'dtype': self._dtype}]
+
+
+class VanillaGRU(_RNNLayer):
+    r"""Applies a multi-layer vanilla gated recurrent unit (GRU) RNN to an input sequence.
+    Note: this is an implementation of Cho et al. 2014; the reset gate :math:`r_t`
+    is applied before matrix multiplication.
+
+    For each element in the input sequence, each layer computes the following
+    function:
+
+    .. math::
+        \begin{array}{ll}
+        r_t = sigmoid(W_{ir} x_t + b_{ir} + W_{hr} h_{(t-1)} + b_{hr}) \\
+        i_t = sigmoid(W_{ii} x_t + b_{ii} + W_{hi} h_{(t-1)} + b_{hi}) \\
+        n_t = \tanh(W_{in} x_t + b_{in} + W_{hn} (r_t * h_{(t-1)}) + b_{hn}) \\
+        h_t = (1 - i_t) * n_t + i_t * h_{(t-1)} \\
+        \end{array}
+
+    where :math:`h_t` is the hidden state at time `t`, :math:`x_t` is the hidden
+    state of the previous layer at time `t` or :math:`input_t` for the first layer,
+    and :math:`r_t`, :math:`i_t`, :math:`n_t` are the reset, input, and new gates, respectively.
+
+    Parameters
+    ----------
+    hidden_size: int
+        The number of features in the hidden state h
+    num_layers: int, default 1
+        Number of recurrent layers.
+    layout : str, default 'TNC'
+        The format of input and output tensors. T, N and C stand for
+        sequence length, batch size, and feature dimensions respectively.
+    dropout: float, default 0
+        If non-zero, introduces a dropout layer on the outputs of each
+        RNN layer except the last layer
+    bidirectional: bool, default False
+        If True, becomes a bidirectional RNN.
+    i2h_weight_initializer : str or Initializer
+        Initializer for the input weights matrix, used for the linear
+        transformation of the inputs.
+    h2h_weight_initializer : str or Initializer
+        Initializer for the recurrent weights matrix, used for the linear
+        transformation of the recurrent state.
+    i2h_bias_initializer : str or Initializer, default 'zeros'
+        Initializer for the bias vector.
+    h2h_bias_initializer : str or Initializer, default 'zeros'
+        Initializer for the bias vector.
+    dtype : str, default 'float32'
+        Type to initialize the parameters and default states to
+    input_size: int, default 0
+        The number of expected features in the input x.
+        If not specified, it will be inferred from input.
+    prefix : str or None
+        Prefix of this `Block`.
+    params : ParameterDict or None
+        Shared Parameters for this `Block`.
+
+
+    Inputs:
+        - **data**: input tensor with shape `(sequence_length, batch_size, input_size)`
+          when `layout` is "TNC". For other layouts, dimensions are permuted accordingly
+          using transpose() operator which adds performance overhead. Consider creating
+          batches in TNC layout during data batching step.
+        - **states**: initial recurrent state tensor with shape
+          `(num_layers, batch_size, num_hidden)`. If `bidirectional` is True,
+          shape will instead be `(2*num_layers, batch_size, num_hidden)`. If
+          `states` is None, zeros will be used as default begin states.
+
+    Outputs:
+        - **out**: output tensor with shape `(sequence_length, batch_size, num_hidden)`
+          when `layout` is "TNC". If `bidirectional` is True, output shape will instead
+          be `(sequence_length, batch_size, 2*num_hidden)`
+        - **out_states**: output recurrent state tensor with the same shape as `states`.
+          If `states` is None `out_states` will not be returned.
+
+
+    Examples
+    --------
+    >>> layer = mx.gluon.rnn.VanillaGRU(100, 3)
+    >>> layer.initialize()
+    >>> input = mx.nd.random.uniform(shape=(5, 3, 10))
+    >>> # by default zeros are used as begin state
+    >>> output = layer(input)
+    >>> # manually specify begin state.
+    >>> h0 = mx.nd.random.uniform(shape=(3, 3, 100))
+    >>> output, hn = layer(input, h0)
+    """
+    def __init__(self, hidden_size, num_layers=1, layout='TNC',
+                 dropout=0, bidirectional=False, input_size=0,
+                 i2h_weight_initializer=None, h2h_weight_initializer=None,
+                 i2h_bias_initializer='zeros', h2h_bias_initializer='zeros',
+                 dtype='float32', **kwargs):
+        super(VanillaGRU, self).__init__(hidden_size, num_layers, layout,
+                                         dropout, bidirectional, input_size,
+                                         i2h_weight_initializer, h2h_weight_initializer,
+                                         i2h_bias_initializer, h2h_bias_initializer,
+                                         'vanilla_gru', None, None, None, None, False,
+                                         dtype, **kwargs)
 
     def state_info(self, batch_size=0):
         return [{'shape': (self._num_layers * self._dir, batch_size, self._hidden_size),

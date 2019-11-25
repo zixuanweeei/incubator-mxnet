@@ -44,6 +44,20 @@ def _infer_weight_shape(op_name, data_shape, kwargs):
     return sym.infer_shape_partial()[0]
 
 
+def _convert_padding(padding, kernel_size):
+    padding_convention = 'EXPLICIT'
+    if isinstance(padding, numeric_types):
+        padding = (padding,)*len(kernel_size)
+    elif isinstance(padding, str):
+        if padding.lower() == 'same':
+            padding_convention = 'SAME'
+            padding = 0
+        elif padding.lower() == 'valid':
+            padding_convention = 'VALID'
+            padding = (0,)*len(kernel_size)
+    return padding_convention, padding
+
+
 class _Conv(HybridBlock):
     """Abstract nD convolution layer (private, used as implementation base).
 
@@ -103,15 +117,14 @@ class _Conv(HybridBlock):
             self._in_channels = in_channels
             if isinstance(strides, numeric_types):
                 strides = (strides,)*len(kernel_size)
-            if isinstance(padding, numeric_types):
-                padding = (padding,)*len(kernel_size)
+            padding_convention, padding = _convert_padding(padding, kernel_size)
             if isinstance(dilation, numeric_types):
                 dilation = (dilation,)*len(kernel_size)
             self._op_name = op_name
             self._kwargs = {
                 'kernel': kernel_size, 'stride': strides, 'dilate': dilation,
                 'pad': padding, 'num_filter': channels, 'num_group': groups,
-                'no_bias': not use_bias, 'layout': layout}
+                'no_bias': not use_bias, 'layout': layout, 'padding_convention': padding_convention}
             if adj is not None:
                 self._kwargs['adj'] = adj
 
@@ -167,6 +180,8 @@ class _Conv(HybridBlock):
             s += ', bias=False'
         if self.act:
             s += ', {}'.format(self.act)
+        if self._kwargs['padding_convention'] == 'SAME':
+            s += ', padding_convention="SAME"'
         s += ')'
         shape = self.weight.shape
         return s.format(name=self.__class__.__name__,

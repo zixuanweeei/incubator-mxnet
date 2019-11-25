@@ -21,7 +21,7 @@
 # pylint: disable=too-many-lines, arguments-differ
 """Definition of various recurrent neural network cells."""
 __all__ = ['RecurrentCell', 'HybridRecurrentCell',
-           'RNNCell', 'LSTMCell', 'GRUCell',
+           'RNNCell', 'LSTMCell', 'GRUCell', 'VanillaGRUCell',
            'SequentialRNNCell', 'HybridSequentialRNNCell', 'DropoutCell',
            'ModifierCell', 'ZoneoutCell', 'ResidualCell',
            'BidirectionalCell']
@@ -669,6 +669,153 @@ class GRUCell(HybridRecurrentCell):
                                   act_type="tanh",
                                   name=prefix+'h_act')
 
+        ones = F.ones_like(update_gate, name=prefix+"ones_like0")
+        next_h = F.elemwise_add(F.elemwise_mul(F.elemwise_sub(ones, update_gate, name=prefix+'minus0'),
+                                               next_h_tmp,
+                                               name=prefix+'mul1'),
+                                F.elemwise_mul(update_gate, prev_state_h, name=prefix+'mul20'),
+                                name=prefix+'out')
+
+        return next_h, [next_h]
+
+
+class VanillaGRUCell(HybridRecurrentCell):
+    r"""Vanilla Gated Rectified Unit (GRU) network cell.
+    Note: this is an implementation of Cho et al. 2014; the reset gate :math:`r_t`
+    is applied before matrix multiplication.
+
+    Each call computes the following function:
+
+    .. math::
+        \begin{array}{ll}
+        r_t = sigmoid(W_{ir} x_t + b_{ir} + W_{hr} h_{(t-1)} + b_{hr}) \\
+        i_t = sigmoid(W_{ii} x_t + b_{ii} + W_{hi} h_{(t-1)} + b_{hi}) \\
+        n_t = \tanh(W_{in} x_t + b_{in} + W_{hn} (r_t * h_{(t-1)}) + b_{hn}) \\
+        h_t = (1 - i_t) * n_t + i_t * h_{(t-1)} \\
+        \end{array}
+
+    where :math:`h_t` is the hidden state at time `t`, :math:`x_t` is the hidden
+    state of the previous layer at time `t` or :math:`input_t` for the first layer,
+    and :math:`r_t`, :math:`i_t`, :math:`n_t` are the reset, input, and new gates, respectively.
+
+    Parameters
+    ----------
+    hidden_size : int
+        Number of units in output symbol.
+    i2h_weight_initializer : str or Initializer
+        Initializer for the input weights matrix, used for the linear
+        transformation of the inputs.
+    h2h_weight_initializer : str or Initializer
+        Initializer for the recurrent weights matrix, used for the linear
+        transformation of the recurrent state.
+    i2h_bias_initializer : str or Initializer, default 'zeros'
+        Initializer for the bias vector.
+    h2h_bias_initializer : str or Initializer, default 'zeros'
+        Initializer for the bias vector.
+    prefix : str, default ``'vanilla_gru_'``
+        prefix for name of `Block`s
+        (and name of weight if params is `None`).
+    params : Parameter or None, default None
+        Container for weight sharing between cells.
+        Created if `None`.
+
+
+    Inputs:
+        - **data**: input tensor with shape `(batch_size, input_size)`.
+        - **states**: a list of one initial recurrent state tensor with shape
+          `(batch_size, num_hidden)`.
+
+    Outputs:
+        - **out**: output tensor with shape `(batch_size, num_hidden)`.
+        - **next_states**: a list of one output recurrent state tensor with the
+          same shape as `states`.
+    """
+    def __init__(self, hidden_size,
+                 i2h_weight_initializer=None, h2h_weight_initializer=None,
+                 i2h_bias_initializer='zeros', h2h_bias_initializer='zeros',
+                 input_size=0, prefix=None, params=None):
+        super(VanillaGRUCell, self).__init__(prefix=prefix, params=params)
+        self._hidden_size = hidden_size
+        self._input_size = input_size
+        self.i2h_weight = self.params.get('i2h_weight', shape=(3*hidden_size, input_size),
+                                          init=i2h_weight_initializer,
+                                          allow_deferred_init=True)
+        self.h2h_weight = self.params.get('h2h_weight', shape=(3*hidden_size, hidden_size),
+                                          init=h2h_weight_initializer,
+                                          allow_deferred_init=True)
+        self.i2h_bias = self.params.get('i2h_bias', shape=(3*hidden_size,),
+                                        init=i2h_bias_initializer,
+                                        allow_deferred_init=True)
+        self.h2h_bias = self.params.get('h2h_bias', shape=(3*hidden_size,),
+                                        init=h2h_bias_initializer,
+                                        allow_deferred_init=True)
+
+    def state_info(self, batch_size=0):
+        return [{'shape': (batch_size, self._hidden_size), '__layout__': 'NC'}]
+
+    def _alias(self):
+        return 'vanilla_gru'
+
+    def __repr__(self):
+        s = '{name}({mapping})'
+        shape = self.i2h_weight.shape
+        mapping = '{0} -> {1}'.format(shape[1] if shape[1] else None, shape[0])
+        return s.format(name=self.__class__.__name__,
+                        mapping=mapping,
+                        **self.__dict__)
+
+    def hybrid_forward(self, F, inputs, states, i2h_weight,
+                       h2h_weight, i2h_bias, h2h_bias):
+        # pylint: disable=too-many-locals
+        prefix = 't%d_'%self._counter
+        prev_state_h = states[0]
+        i2h = F.FullyConnected(data=inputs,
+                               weight=i2h_weight,
+                               bias=i2h_bias,
+                               num_hidden=self._hidden_size * 3,
+                               name=prefix+'i2h')
+        h2h_gates_weight = F.Slice(data=h2h_weight,
+                                   begin=(0, 0),
+                                   end=(2*self._hidden_size, None),
+                                   step=(1, 1),
+                                   name=prefix+'gates_weights_slice')
+        h2h_gates_bias = F.Slice(data=h2h_weight,
+                                 begin=(0,),
+                                 end=(2*self._hidden_size,),
+                                 step=(1,),
+                                 name=prefix+'gates_bias_slice')
+        h2h_gates = F.FullyConnected(data=prev_state_h,
+                                     weight=h2h_gates_weight,
+                                     bias=h2h_gates_bias,
+                                     num_hidden=self.hidden_size * 2,
+                                     name=prefix+'h2h_gates')
+        i2h_r, i2h_z, i2h = F.SliceChannel(i2h, num_outputs=3,
+                                           name=prefix+'i2h_slice')
+        h2h_r, h2h_z = F.SliceChannel(h2h_gates, num_outputs=2,
+                                      name=prefix+'h2h_slice')
+        reset_gate = F.Activation(F.elemwise_add(i2h_r, h2h_r, name=prefix+'plus0'), act_type="sigmoid",
+                                  name=prefix+'r_act')
+        update_gate = F.Activation(F.elemwise_add(i2h_z, h2h_z, name=prefix+'plus1'), act_type="sigmoid",
+                                   name=prefix+'z_act')
+
+        h2h_candidate_weight = F.Slice(data=h2h_weight,
+                                       begin=(2*self._hidden_size, 0),
+                                       end=(None, None),
+                                       step=(1, 1),
+                                       name=prefix+'candidate_weights_slice')
+        h2h_candidate_bias = F.Slice(data=h2h_weight,
+                                     begin=(2*self._hidden_size,),
+                                     end=(None,),
+                                     step=(1,),
+                                     name=prefix+'candidate_bias_slice')
+        h2h = F.FullyConnected(data=F.element_mul(reset_gate, prev_state_h, name=prefix+'mul0'),
+                               weight=h2h_candidate_weight,
+                               bias=h2h_candidate_bias,
+                               num_hidden=self._hidden_size,
+                               name=prefix+'h2h_candidates')
+        next_h_tmp = F.Activation(F.elemwise_add(i2h, h2h, name=prefix+'plus2'),
+                                  act_type="tanh",
+                                  name=prefix+'h_act')
         ones = F.ones_like(update_gate, name=prefix+"ones_like0")
         next_h = F.elemwise_add(F.elemwise_mul(F.elemwise_sub(ones, update_gate, name=prefix+'minus0'),
                                                next_h_tmp,
