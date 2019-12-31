@@ -46,7 +46,8 @@ from ..ndarray import numpy as _mx_nd_np
 from ..ndarray.numpy import _internal as _npi
 from ..ndarray.ndarray import _storage_type
 
-__all__ = ['ndarray', 'empty', 'array', 'shape', 'zeros', 'zeros_like', 'ones', 'ones_like', 'full', 'full_like',
+__all__ = ['ndarray', 'empty', 'empty_like', 'array', 'shape',
+           'zeros', 'zeros_like', 'ones', 'ones_like', 'full', 'full_like',
            'add', 'subtract', 'multiply', 'divide', 'mod', 'remainder', 'power', 'bitwise_not', 'delete',
            'arctan2', 'sin', 'cos', 'tan', 'sinh', 'cosh', 'tanh', 'log10', 'invert',
            'sqrt', 'cbrt', 'abs', 'absolute', 'exp', 'expm1', 'arcsin', 'arccos', 'arctan', 'sign', 'log',
@@ -55,11 +56,11 @@ __all__ = ['ndarray', 'empty', 'array', 'shape', 'zeros', 'zeros_like', 'ones', 
            'tensordot', 'eye', 'linspace', 'logspace', 'expand_dims', 'tile', 'arange', 'array_split',
            'split', 'vsplit', 'concatenate', 'stack', 'vstack', 'column_stack', 'dstack', 'average', 'mean',
            'maximum', 'minimum', 'swapaxes', 'clip', 'argmax', 'argmin', 'std', 'var', 'indices', 'copysign',
-           'ravel', 'unravel_index', 'hanning', 'hamming', 'blackman', 'flip', 'around', 'round', 'arctan2',
-           'hypot', 'bitwise_xor', 'bitwise_or', 'rad2deg', 'deg2rad', 'unique', 'lcm', 'tril', 'identity',
-           'take', 'ldexp', 'vdot', 'inner', 'outer', 'equal', 'not_equal', 'greater', 'less', 'greater_equal',
-           'less_equal', 'hsplit', 'rot90', 'einsum', 'true_divide', 'nonzero', 'shares_memory',
-           'may_share_memory', 'diff', 'resize', 'nan_to_num', 'where', 'bincount']
+           'ravel', 'unravel_index', 'hanning', 'hamming', 'blackman', 'flip', 'flipud', 'fliplr', 'around',
+           'round', 'arctan2', 'hypot', 'bitwise_xor', 'bitwise_or', 'rad2deg', 'deg2rad', 'unique', 'lcm',
+           'tril', 'identity', 'take', 'ldexp', 'vdot', 'inner', 'outer', 'equal', 'not_equal', 'greater',
+           'less', 'greater_equal', 'less_equal', 'hsplit', 'rot90', 'einsum', 'true_divide', 'nonzero',
+           'shares_memory', 'may_share_memory', 'diff', 'resize', 'nan_to_num', 'where', 'bincount']
 
 # Return code for dispatching indexing function call
 _NDARRAY_UNSUPPORTED_INDEXING = -1
@@ -2200,6 +2201,65 @@ def full(shape, fill_value, dtype=None, order='C', ctx=None, out=None):
     """
     return _mx_nd_np.full(shape, fill_value, order=order, ctx=ctx, dtype=dtype, out=out)
 # pylint: enable=too-many-arguments, redefined-outer-name
+
+
+@set_module('mxnet.numpy')
+def empty_like(prototype, dtype=None, order='C', subok=False, shape=None): # pylint: disable=W0621
+    """
+    Return a new array with the same shape and type as a given array.
+
+    Parameters
+    ----------
+    prototype : ndarray
+        The shape and data-type of `prototype` define these same attributes
+        of the returned array.
+    dtype : data-type, optional
+        Overrides the data type of the result.
+    order : {'C'}, optional
+        Whether to store multidimensional data in C- or Fortran-contiguous
+        (row- or column-wise) order in memory. Currently only supports C order.
+    subok : {False}, optional
+        If True, then the newly created array will use the sub-class
+        type of 'a', otherwise it will be a base-class array. Defaults
+        to False.
+        (Only support False at this moment)
+    shape : int or sequence of ints, optional.
+        Overrides the shape of the result. If order='K' and the number of
+        dimensions is unchanged, will try to keep order, otherwise,
+        order='C' is implied.
+        (Not supported at this moment)
+
+    Returns
+    -------
+    out : ndarray
+        Array of uninitialized (arbitrary) data with the same
+        shape and type as `prototype`.
+
+    See Also
+    --------
+    ones_like : Return an array of ones with shape and type of input.
+    zeros_like : Return an array of zeros with shape and type of input.
+    full_like : Return a new array with shape of input filled with value.
+    empty : Return a new uninitialized array.
+
+    Notes
+    -----
+    This function does *not* initialize the returned array; to do that use
+    `zeros_like` or `ones_like` instead.  It may be marginally faster than
+    the functions that do set the array values.
+
+    Examples
+    --------
+    >>> a = np.array([[1,2,3], [4,5,6]])
+    >>> np.empty_like(a)
+    array([[-5764607523034234880, -2305834244544065442,           4563075075], # uninitialized
+           [          4567052944, -5764607523034234880,      844424930131968]])
+    >>> a = np.array([[1., 2., 3.],[4.,5.,6.]])
+    >>> np.empty_like(a)
+    array([[4.9e-324, 9.9e-324, 1.5e-323], # uninitialized
+           [2.0e-323, 2.5e-323, 3.0e-323]])
+    """
+    return _mx_nd_np.empty_like(prototype, dtype=dtype, order=order, subok=subok, shape=shape)
 
 
 @set_module('mxnet.numpy')
@@ -6451,6 +6511,108 @@ def flip(m, axis=None, out=None):
             [3, 2]]])
     """
     return _mx_nd_np.flip(m, axis, out=out)
+
+
+@set_module('mxnet.numpy')
+def flipud(m):
+    r"""
+    flipud(*args, **kwargs)
+
+    Flip array in the up/down direction.
+
+    Flip the entries in each column in the up/down direction.
+    Rows are preserved, but appear in a different order than before.
+
+    Parameters
+    ----------
+    m : array_like
+        Input array.
+
+    Returns
+    -------
+    out : array_like
+        A view of `m` with the rows reversed.  Since a view is
+        returned, this operation is :math:`\mathcal O(1)`.
+
+    See Also
+    --------
+    fliplr : Flip array in the left/right direction.
+    rot90 : Rotate array counterclockwise.
+
+    Notes
+    -----
+    Equivalent to ``m[::-1,...]``.
+    Does not require the array to be two-dimensional.
+
+    Examples
+    --------
+    >>> A = np.diag(np.array([1.0, 2, 3]))
+    >>> A
+    array([[1.,  0.,  0.],
+           [0.,  2.,  0.],
+           [0.,  0.,  3.]])
+    >>> np.flipud(A)
+    array([[0.,  0.,  3.],
+           [0.,  2.,  0.],
+           [1.,  0.,  0.]])
+
+    >>> A = np.random.randn(2,3,5)
+    >>> np.all(np.flipud(A) == A[::-1,...])
+    array(True)
+
+    >>> np.flipud(np.array([1,2]))
+    array([2., 1.])
+    """
+    return flip(m, 0)
+
+
+@set_module('mxnet.numpy')
+def fliplr(m):
+    r"""
+    fliplr(*args, **kwargs)
+
+    Flip array in the left/right direction.
+
+    Flip the entries in each row in the left/right direction.
+    Columns are preserved, but appear in a different order than before.
+
+    Parameters
+    ----------
+    m : array_like
+        Input array, must be at least 2-D.
+
+    Returns
+    -------
+    f : ndarray
+        A view of `m` with the columns reversed.  Since a view
+        is returned, this operation is :math:`\mathcal O(1)`.
+
+    See Also
+    --------
+    flipud : Flip array in the up/down direction.
+    rot90 : Rotate array counterclockwise.
+
+    Notes
+    -----
+    Equivalent to m[:,::-1]. Requires the array to be at least 2-D.
+
+    Examples
+    --------
+    >>> A = np.diag([1.,2.,3.])
+    >>> A
+    array([[1.,  0.,  0.],
+        [0.,  2.,  0.],
+        [0.,  0.,  3.]])
+    >>> np.fliplr(A)
+    array([[0.,  0.,  1.],
+        [0.,  2.,  0.],
+        [3.,  0.,  0.]])
+
+    >>> A = np.random.randn(2,3,5)
+    >>> np.all(np.fliplr(A) == A[:,::-1,...])
+    array(True)
+    """
+    return flip(m, 1)
 
 
 @set_module('mxnet.numpy')

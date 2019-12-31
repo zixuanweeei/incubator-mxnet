@@ -104,6 +104,8 @@ _NUMPY_ARRAY_FUNCTION_LIST = [
     'expand_dims',
     'fix',
     'flip',
+    'flipud',
+    'fliplr',
     'inner',
     'max',
     'amax',
@@ -153,7 +155,9 @@ _NUMPY_ARRAY_FUNCTION_LIST = [
     'resize',
     'where',
     'full_like',
-    'bincount'
+    'bincount',
+    'empty_like',
+    'nan_to_num',
 ]
 
 

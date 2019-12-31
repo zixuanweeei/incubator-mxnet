@@ -787,6 +787,18 @@ def _add_workload_flip():
     OpArgMngr.add_workload('flip', np.array([[[0, 1], [2, 3]], [[4, 5], [6, 7]]]), (1, 2))
 
 
+def _add_workload_flipud():
+    OpArgMngr.add_workload('flipud', np.random.normal(size=(4, 4)))
+    OpArgMngr.add_workload('flipud', np.array([[0, 1, 2], [3, 4, 5]]))
+    OpArgMngr.add_workload('flipud', np.array([[[0, 1], [2, 3]], [[4, 5], [6, 7]]]))
+
+
+def _add_workload_fliplr():
+    OpArgMngr.add_workload('fliplr', np.random.normal(size=(4, 4)))
+    OpArgMngr.add_workload('fliplr', np.array([[0, 1, 2], [3, 4, 5]]))
+    OpArgMngr.add_workload('fliplr', np.array([[[0, 1], [2, 3]], [[4, 5], [6, 7]]]))
+
+
 def _add_workload_max(array_pool):
     OpArgMngr.add_workload('max', array_pool['4x1'])
 
@@ -1555,6 +1567,24 @@ def _add_workload_resize():
     OpArgMngr.add_workload('resize', np.zeros((10, 0)), (0, 10))
     OpArgMngr.add_workload('resize', np.zeros((10, 0)), (0, 100))
 
+def _add_workload_empty_like():
+    OpArgMngr.add_workload('empty_like', np.random.uniform(low=0, high=100, size=(1,3,4), dtype='float64'))
+    OpArgMngr.add_workload('empty_like', np.random.uniform(low=0, high=100, size=(9,3,1)), np.int32)
+    OpArgMngr.add_workload('empty_like', np.random.uniform(low=0, high=100, size=(9,3)), 'float32')
+    OpArgMngr.add_workload('empty_like', np.random.uniform(low=0, high=100, size=(9,3,1)), np.bool_)
+    OpArgMngr.add_workload('empty_like', np.random.uniform(low=0, high=100, size=(0,3)), np.float32)
+
+
+def _add_workload_nan_to_num():
+    array1 = np.array([[-433, 0, 456, _np.inf], [-1, -_np.inf, 0, 1]])
+    array2 = np.array([_np.nan, _np.inf, -_np.inf, -574, 0, 23425, 24234,-5])
+    array3 = np.array(-_np.inf)
+    OpArgMngr.add_workload('nan_to_num', array1, True, 0, 100, -100)
+    OpArgMngr.add_workload('nan_to_num', array1, True, 0.00)
+    OpArgMngr.add_workload('nan_to_num', array2, True)
+    OpArgMngr.add_workload('nan_to_num', array2, True, -2000, 10000, -10000)
+    OpArgMngr.add_workload('nan_to_num', array3, True)
+
 
 @use_np
 def _prepare_workloads():
@@ -1588,6 +1618,8 @@ def _prepare_workloads():
     _add_workload_expand_dims()
     _add_workload_fix()
     _add_workload_flip()
+    _add_workload_flipud()
+    _add_workload_fliplr()
     _add_workload_max(array_pool)
     _add_workload_amax(array_pool)
     _add_workload_min(array_pool)
@@ -1691,6 +1723,8 @@ def _prepare_workloads():
     _add_workload_diff()
     _add_workload_resize()
     _add_workload_full_like(array_pool)
+    _add_workload_empty_like()
+    _add_workload_nan_to_num()
 
 
 _prepare_workloads()
@@ -1735,7 +1769,7 @@ def check_interoperability(op_list):
     for name in op_list:
         if name in _TVM_OPS and not is_op_runnable():
             continue
-        if name in ['shares_memory', 'may_share_memory']:  # skip list
+        if name in ['shares_memory', 'may_share_memory', 'empty_like']:  # skip list
             continue
         if name in ['full_like', 'zeros_like', 'ones_like'] and \
                 StrictVersion(platform.python_version()) < StrictVersion('3.0.0'):
