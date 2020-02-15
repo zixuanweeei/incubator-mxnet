@@ -43,11 +43,10 @@ scala_prepare() {
 
 check_cython() {
     set -ex
-    local python_ver=$1
-    local is_cython_used=$(python${python_ver} <<EOF
+    local is_cython_used=$(python3 <<EOF
 import sys
 import mxnet as mx
-cython_ndarraybase = 'mxnet._cy' + str(sys.version_info.major) + '.ndarray'
+cython_ndarraybase = 'mxnet._cy3.ndarray'
 print(mx.nd._internal.NDArrayBase.__module__ == cython_ndarraybase)
 EOF
 )
@@ -1009,10 +1008,6 @@ cd_unittest_ubuntu() {
 
     local nose_cmd="nosetests-3.4"
 
-    if [[ ${python_cmd} = "python" ]]; then
-        nose_cmd="nosetests-2.7"
-    fi
-
     $nose_cmd $NOSE_TIMER_ARGUMENTS --verbose tests/python/unittest
     $nose_cmd $NOSE_TIMER_ARGUMENTS --verbose tests/python/quantization
 
@@ -1084,7 +1079,7 @@ unittest_ubuntu_python3_gpu_cython() {
     export MXNET_ENABLE_CYTHON=1
     export MXNET_ENFORCE_CYTHON=1
     export DMLC_LOG_STACK_TRACE_DEPTH=10
-    check_cython 3
+    check_cython
     nosetests-3.4 $NOSE_COVERAGE_ARGUMENTS $NOSE_TIMER_ARGUMENTS --with-xunit --xunit-file nosetests_gpu.xml --verbose tests/python/gpu
 }
 
@@ -1965,15 +1960,11 @@ cd_integration_test_pypi() {
     local test_conv_params=''
     local mnist_params=''
 
-    local pip_cmd='pip'
+    local pip_cmd='pip3'
 
     if [ "${gpu_enabled}" = "true" ]; then
         mnist_params="--gpu 0"
         test_conv_params="--gpu"
-    fi
-
-    if [ "${python_cmd}" = "python3" ]; then
-        pip_cmd='pip3'
     fi
 
     # install mxnet wheel package
