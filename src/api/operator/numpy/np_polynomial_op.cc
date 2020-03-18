@@ -18,31 +18,25 @@
  */
 
 /*!
- * \file np_tril_op.cc
- * \brief Implementation of the API of functions in src/operator/numpy/np_diff.cc
+ * \file np_polynomial_op.cc
+ * \brief Implementation of the API of functions in src/operator/numpy/np_polynomial_op.cc
  */
 #include <mxnet/api_registry.h>
 #include "../utils.h"
-#include "../../../operator/numpy/np_tril_op-inl.h"
+#include "../../../operator/numpy/np_polynomial_op-inl.h"
 
 namespace mxnet {
 
-MXNET_REGISTER_API("_npi.tril")
+MXNET_REGISTER_API("_npi.polyval")
 .set_body([](runtime::MXNetArgs args, runtime::MXNetRetValue* ret) {
   using namespace runtime;
-  const nnvm::Op* op = Op::Get("_npi_tril");
+  const nnvm::Op* op = Op::Get("_npi_polyval");
   nnvm::NodeAttrs attrs;
-  op::TrilParam param;
-  param.k = args[1].operator int();
-
-  // we directly copy TrilParam, which is trivially-copyable
-  attrs.parsed = param;
   attrs.op = op;
-  SetAttrDict<op::TrilParam>(&attrs);
 
+  NDArray* inputs[] = {args[0].operator mxnet::NDArray*(), args[1].operator mxnet::NDArray*()};
+  int num_inputs = 2;
   int num_outputs = 0;
-  NDArray* inputs[] = {args[0].operator mxnet::NDArray*()};
-  int num_inputs = 1;
   auto ndoutputs = Invoke(op, &attrs, num_inputs, inputs, &num_outputs, nullptr);
   *ret = ndoutputs[0];
 });
