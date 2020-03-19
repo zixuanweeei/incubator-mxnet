@@ -59,6 +59,9 @@ def prepare_workloads():
     OpArgMngr.add_workload("add", pool['2x2'], pool['2x2'])
     OpArgMngr.add_workload("linalg.svd", pool['3x3'])
     OpArgMngr.add_workload("split", pool['3x3'], (0, 1, 2), axis=1)
+    OpArgMngr.add_workload("argmax", pool['3x2'], axis=-1)
+    OpArgMngr.add_workload("argmin", pool['3x2'], axis=-1)
+    OpArgMngr.add_workload("indices", dimensions=(1, 2, 3))
     OpArgMngr.add_workload("subtract", pool['2x2'], pool['2x2'])
     OpArgMngr.add_workload("multiply", pool['2x2'], pool['2x2'])
     OpArgMngr.add_workload("mod", pool['2x2'], pool['2x2'])
@@ -78,6 +81,8 @@ def prepare_workloads():
     OpArgMngr.add_workload("random.uniform", low=0, high=1, size=1)
     OpArgMngr.add_workload("where", pool['2x3'], pool['2x3'], pool['2x1'])
     OpArgMngr.add_workload("may_share_memory", pool['2x3'][:0], pool['2x3'][:1])
+    OpArgMngr.add_workload("roll", pool["2x2"], 1, axis=0)
+    OpArgMngr.add_workload("rot90", pool["2x2"], 2)
 
 
 def benchmark_helper(f, *args, **kwargs):
