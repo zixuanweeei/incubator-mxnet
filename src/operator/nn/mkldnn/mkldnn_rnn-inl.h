@@ -44,14 +44,16 @@ struct MKLDNNRnnLayerParam {
   bool bidirectional;
   bool state_outputs;
   int num_layer;
-  int batch_size;
-  int input_size;
+  index_t batch_size;
+  index_t input_size;
   int state_size;
-  int seq_len;
+  int proj_size;
+  index_t seq_len;
 
   dims src_dims;           // Dimensions of source input in format_tag::tnc
   dims weight_layer_dims;  // Dimensions of layer weights in format_tag::ldigo
   dims weight_iter_dims;   // Dimensions of iter weights in format_tag::ldigo
+  dims weight_proj_dims;   // Dimensions of projection weights in format_tag::ldio
   dims bias_dims;          // Dimensions of bias in format_tag::ldgo
   dims dst_dims;           // Dimensions of output in format_tag::tnc
   dims state_dims;         // Dimensions of the state cell in format_tag::ldnc
@@ -63,12 +65,12 @@ struct MKLDNNRnnLayerParam {
   size_t naive_single_b_size;  // bias size of a single cell from framework
   size_t single_state_size;    // state size of a single cell, hy, cy
 
-  MKLDNNRnnLayerParam(int num_layer, int batch_size, int seq_len,
-                      int input_size, int state_size,
+  MKLDNNRnnLayerParam(int num_layer, index_t batch_size, index_t seq_len,
+                      index_t input_size, int state_size, int proj_size,
                       int mode, bool bidirectional = true)
       : mode(mode), bidirectional(bidirectional), state_outputs(true),
         num_layer(num_layer), batch_size(batch_size), input_size(input_size),
-        state_size(state_size), seq_len(seq_len) { }
+        state_size(state_size), proj_size(proj_size), seq_len(seq_len) { }
 
   void SetDims();
 };
@@ -129,6 +131,7 @@ class RnnPrimitive {
     auto fwd_pd = reinterpret_cast<typename rnn_fwd::primitive_desc*>(rnn_fwd_prim.fwd_pd_.get());
     rnn_fwd_prim.weights_layer_desc_ = fwd_pd->weights_layer_desc();
     rnn_fwd_prim.weights_iter_desc_  = fwd_pd->weights_iter_desc();
+    rnn_fwd_prim.weights_proj_desc_  = fwd_pd->weights_projection_desc();
     rnn_fwd_prim.workspace_desc_ = fwd_pd->workspace_desc();
 
     rnn_fwd_prim.primitive_ = std::shared_ptr<mkldnn::primitive>(new rnn_fwd(*fwd_pd));
@@ -141,6 +144,7 @@ class RnnPrimitive {
     this->primitive_ = nullptr;
     this->weights_layer_desc_ = mkldnn::memory::desc();
     this->weights_iter_desc_ = mkldnn::memory::desc();
+    this->weights_proj_desc_ = mkldnn::memory::desc();
     this->workspace_desc_ = mkldnn::memory::desc();
   }
 
@@ -149,6 +153,7 @@ class RnnPrimitive {
     this->primitive_ = rnn_fwd_prim.primitive_;
     this->weights_layer_desc_ = rnn_fwd_prim.weights_layer_desc_;
     this->weights_iter_desc_ = rnn_fwd_prim.weights_iter_desc_;
+    this->weights_proj_desc_ = rnn_fwd_prim.weights_proj_desc_;
     this->workspace_desc_ = rnn_fwd_prim.workspace_desc_;
   }
 
@@ -158,6 +163,7 @@ class RnnPrimitive {
       this->primitive_ = rnn_fwd_prim.primitive_;
       this->weights_layer_desc_ = rnn_fwd_prim.weights_layer_desc_;
       this->weights_iter_desc_ = rnn_fwd_prim.weights_iter_desc_;
+      this->weights_proj_desc_ = rnn_fwd_prim.weights_proj_desc_;
       this->workspace_desc_ = rnn_fwd_prim.workspace_desc_;
     }
 
@@ -175,6 +181,10 @@ class RnnPrimitive {
     return weights_iter_desc_;
   }
 
+  const mkldnn::memory::desc& GetProjDesc() const {
+    return weights_proj_desc_;
+  }
+
   const mkldnn::memory::desc& GetWorkspaceDesc() const {
     return workspace_desc_;
   }
@@ -184,6 +194,7 @@ class RnnPrimitive {
   std::shared_ptr<mkldnn::primitive> primitive_;
   mkldnn::memory::desc weights_layer_desc_;
   mkldnn::memory::desc weights_iter_desc_;
+  mkldnn::memory::desc weights_proj_desc_;
   mkldnn::memory::desc workspace_desc_;
 };
 
@@ -232,10 +243,12 @@ class MKLDNNRnnForward {
 
   mkldnn::memory *weights_layer_ = nullptr;
   mkldnn::memory *weights_iter_ = nullptr;
+  mkldnn::memory *weights_proj_ = nullptr;
   mkldnn::memory *bias_ = nullptr;
 
   mkldnn::memory *weights_layer_r_ = nullptr;
   mkldnn::memory *weights_iter_r_ = nullptr;
+  mkldnn::memory *weights_proj_r_ = nullptr;
 
   /*
    * net_args must contain some keys as below:

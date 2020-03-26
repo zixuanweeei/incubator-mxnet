@@ -53,18 +53,21 @@ void MKLDNNRnnLayerParam::SetDims() {
   const int nbias = mode == rnn_enum::kGru ? (ngates + 1) : ngates;
   const int num_direction = bidirectional ? 2 : 1;
 
+  const int iter_size = proj_size < 0 ? state_size : proj_size;
   src_dims.assign({seq_len, batch_size, input_size});
   weight_layer_dims.assign({num_layer, num_direction, input_size, ngates, state_size});
-  weight_iter_dims.assign({num_layer, num_direction, state_size, ngates, state_size});
+  weight_iter_dims.assign({num_layer, num_direction, iter_size, ngates, state_size});
+  weight_proj_dims.assign({num_layer, num_direction, state_size, iter_size});
   bias_dims.assign({num_layer, num_direction, nbias, state_size});
-  dst_dims.assign({seq_len, batch_size, state_size * num_direction});
-  state_dims.assign({num_layer, num_direction, batch_size, state_size});
+  dst_dims.assign({seq_len, batch_size, iter_size * num_direction});
+  state_dims.assign({num_layer, num_direction, batch_size, iter_size});
 
   // unidirectional size of a single cell
-  single_w_size = (input_size + state_size) * ngates * state_size;
+  single_w_size = (input_size + iter_size) * ngates * state_size;
+  if (proj_size > 0) single_w_size += state_size * proj_size;
   single_b_size = nbias * state_size;
   naive_single_b_size = ngates * state_size * 2;  // naive RNN variants have double bias
-  single_state_size = batch_size * state_size;
+  single_state_size = batch_size * iter_size;
 
   // Get workspace size for cached weights memory
   // multiplication of tensor dimensions
@@ -75,6 +78,7 @@ void MKLDNNRnnLayerParam::SetDims() {
 
   workspace_size = tz_volume(weight_layer_dims) + tz_volume(weight_iter_dims) +
       tz_volume(bias_dims);
+  if (proj_size > 0) workspace_size += tz_volume(weight_proj_dims);
   reserve_size = 0;
 }
 
@@ -82,7 +86,11 @@ MKLDNNRnnFullParam MKLDNNRnnFullParamParser(const RNNParam& rnn_param, const int
                                             const int batch_size, const int input_size) {
   MKLDNNRnnFullParam full_param;
   full_param.default_param = rnn_param;
-  size_t state_size = rnn_param.state_size;
+  const int state_size = rnn_param.state_size;
+  const int proj_size = rnn_param.projection_size.has_value() ?
+      rnn_param.projection_size.value() : -1;
+  const int iter_size = rnn_param.projection_size.has_value() ?
+      rnn_param.projection_size.value() : state_size;
   LayerParamVector &layer_params = full_param.layer_params;
 
   full_param.default_param.seq_length_ = seq_len;
@@ -90,20 +98,21 @@ MKLDNNRnnFullParam MKLDNNRnnFullParamParser(const RNNParam& rnn_param, const int
   full_param.default_param.input_size_ = input_size;
   // Set basic size by constructing MKLDNNRnnLayerParam instance(s)
   if (rnn_param.bidirectional) {  // unfused bidirectional multi-layer RNN
-    layer_params.emplace_back(1, batch_size, seq_len, input_size, state_size, rnn_param.mode);
+    layer_params.emplace_back(1, batch_size, seq_len, input_size, state_size, proj_size,
+        rnn_param.mode);
     for (size_t layer = 1; layer < rnn_param.num_layers; ++layer) {
-      layer_params.emplace_back(1, batch_size, seq_len, state_size * 2, state_size,
+      layer_params.emplace_back(1, batch_size, seq_len, iter_size * 2, state_size, proj_size,
           rnn_param.mode);
     }
-  } else if (input_size == static_cast<int>(state_size)) {  // fused multi-layer RNN
+  } else if (input_size == static_cast<int>(state_size) && proj_size < 0) {  // fused multi-layer
     layer_params.emplace_back(rnn_param.num_layers, batch_size, seq_len, input_size,
-        state_size, rnn_param.mode, false);
-  } else {  // unfused 1st layer, plus fused 2-end layers
-    layer_params.emplace_back(1, batch_size, seq_len, input_size, state_size, rnn_param.mode,
-        false);
+        state_size, proj_size, rnn_param.mode, false);
+  } else {  // unfused 1st layer, plus fused 2~end layers
+    layer_params.emplace_back(1, batch_size, seq_len, input_size, state_size, proj_size,
+        rnn_param.mode, false);
     if (rnn_param.num_layers > 1)
-      layer_params.emplace_back(rnn_param.num_layers - 1, batch_size, seq_len, state_size,
-          state_size, rnn_param.mode, false);
+      layer_params.emplace_back(rnn_param.num_layers - 1, batch_size, seq_len, iter_size,
+          state_size, proj_size, rnn_param.mode, false);
   }
 
   // Set dims, workspace size, and state_outputs flag
@@ -162,6 +171,9 @@ RnnPrimitive GetRnnFwdPrim(
   auto bias_desc         = memory::desc(layer_param.bias_dims, data_type, tag::ldgo);
   auto dst_layer_desc    = memory::desc(layer_param.dst_dims, data_type, tag::tnc);
   auto src_state_desc    = memory::desc(layer_param.state_dims, data_type, tag::ldnc);
+  auto weight_peep_desc  = memory::desc();
+  auto weight_proj_desc = layer_param.proj_size > 0 ? memory::desc(
+      layer_param.weight_proj_dims, data_type, tag::any) : memory::desc();
   auto dst_state_desc = layer_param.state_outputs ? memory::desc(
       layer_param.state_dims, data_type, tag::ldnc) : memory::desc();
 
@@ -170,8 +182,8 @@ RnnPrimitive GetRnnFwdPrim(
     case rnn_enum::kLstm:
       fwd = RnnPrimitive::Create<lstm_forward>(prop, mkldnn_rnn_direction,
           src_layer_desc, src_state_desc, src_state_desc, weight_layer_desc,
-          weight_iter_desc, bias_desc, dst_layer_desc, dst_state_desc,
-          dst_state_desc);
+          weight_iter_desc, weight_peep_desc, weight_proj_desc, bias_desc,
+          dst_layer_desc, dst_state_desc, dst_state_desc);
       break;
     case rnn_enum::kGru:
       fwd = RnnPrimitive::Create<lbr_gru_forward>(prop, mkldnn_rnn_direction,
@@ -395,6 +407,7 @@ inline void MKLDNNMemoryReorder(const mkldnn::memory& src,
 void MKLDNNRnnForward::ReorderWeights() {
   MKLDNNMemoryReorder(*weights_layer_r_, *weights_layer_);
   MKLDNNMemoryReorder(*weights_iter_r_, *weights_iter_);
+  if (param_.proj_size > 0) MKLDNNMemoryReorder(*weights_proj_r_, *weights_proj_);
 }
 
 void AdjustGruGateOrder(char* weight,
@@ -473,12 +486,16 @@ void MKLDNNRnnForward::SetWeightsMem(MKLDNNRnnMemMgr* mgr, void *w_ptr, void *b_
                                      const bool is_train, const int dtype) {
   using format_tag = mkldnn::memory::format_tag;
   auto mkldnn_dtype = get_mkldnn_type(dtype);
+  const bool use_proj = (param_.proj_size > 0);
   // Get the weights' memory for RNN forward primitive
   if (weights_layer_ == nullptr) {
     weights_layer_ = mgr->Alloc(fwd_inf_.GetLayerDesc());
   }
   if (weights_iter_ == nullptr) {
     weights_iter_ = mgr->Alloc(fwd_inf_.GetIterDesc());
+  }
+  if (use_proj && weights_proj_ == nullptr) {
+    weights_proj_ = mgr->Alloc(fwd_inf_.GetProjDesc());
   }
   if (bias_ == nullptr) {
     bias_ = mgr->Alloc(
@@ -494,41 +511,56 @@ void MKLDNNRnnForward::SetWeightsMem(MKLDNNRnnMemMgr* mgr, void *w_ptr, void *b_
     weights_iter_r_ = mgr->Alloc(
         {param_.weight_iter_dims, mkldnn_dtype, format_tag::ldgoi});
   }
+  if (use_proj && weights_proj_r_ == nullptr) {
+    weights_proj_r_ = mgr->Alloc(
+        {param_.weight_proj_dims, mkldnn_dtype, format_tag::ldoi});
+  }
 
   // Get the bytes of a real type
   size_t dtype_bytes = mshadow::mshadow_sizeof(dtype);
 
   // convert void* to char* for arithmetic operations
+  const size_t iter_size = use_proj ? param_.proj_size : param_.state_size;
   char *weights_ptr = static_cast<char *>(w_ptr);
   size_t wx_bytes = GetRnnGatesNum(param_.mode) * param_.state_size *
         param_.input_size * dtype_bytes;  //* DIMS: ngates x state_size x input_size
   size_t wh_bytes = GetRnnGatesNum(param_.mode) * param_.state_size *
-        param_.state_size * dtype_bytes;  //* DIMS: ngates x state_size x state_size
+        iter_size * dtype_bytes;  //* DIMS: ngates x state_size x state_size, if not use projection.
+                                  // With projection, DIMS is ngates x state_size x projection_size
+  size_t wr_bytes = param_.state_size * iter_size * dtype_bytes;
   char *l2r_wx = weights_ptr;
   char *l2r_wh = l2r_wx + wx_bytes;       //* DIMS: ngates x state_size * state_size
+  char *l2r_wr = l2r_wh + wh_bytes;       //* DIMS: ngates x state_size * iter_size
 
   if (param_.num_layer == 1 && param_.bidirectional) {
     //* single bidirectinal layer, concat weights on direction axis
     char *r2l_wx = weights_ptr + param_.single_w_size * dtype_bytes;
-    char *r2l_wh = r2l_wx + wx_bytes;  //* DIMS: ngates x state_size * state_size
+    char *r2l_wh = r2l_wx + wx_bytes;  //* DIMS: ngates x state_size x state_size
+    char *r2l_wr = r2l_wh + wh_bytes;  //* DIMS: ngates x state_size x iter_size
     ConcatWeights(*weights_layer_r_, 1, {l2r_wx, r2l_wx}, format_tag::ldgoi);
     ConcatWeights(*weights_iter_r_, 1, {l2r_wh, r2l_wh}, format_tag::ldgoi);
+    if (use_proj) ConcatWeights(*weights_proj_r_, 1, {l2r_wr, r2l_wr}, format_tag::ldoi);
   } else if (param_.num_layer == 1 && !param_.bidirectional) {
     //* single uni-directional layer, no concatenate operator needed
     std::memcpy(weights_layer_r_->get_data_handle(), l2r_wx, wx_bytes);
     std::memcpy(weights_iter_r_->get_data_handle(), l2r_wh, wh_bytes);
+    if (use_proj) std::memcpy(weights_proj_r_->get_data_handle(), l2r_wr, wr_bytes);
   } else if (param_.num_layer > 1 && !param_.bidirectional) {
     //* concat fused multi-layer weights on layer axis
     std::vector<void *> l2r_wx_ptrs;
     std::vector<void *> l2r_wh_ptrs;
+    std::vector<void *> l2r_wr_ptrs;
     for (int lyr = 0; lyr < param_.num_layer; ++lyr) {
       char *lth_wx = l2r_wx + lyr * param_.single_w_size * dtype_bytes;
       char *lth_wh = lth_wx + wx_bytes;
+      char *lth_wr = lth_wh + wh_bytes;
       l2r_wx_ptrs.push_back(lth_wx);
       l2r_wh_ptrs.push_back(lth_wh);
+      if (use_proj) l2r_wr_ptrs.push_back(lth_wr);
     }
     ConcatWeights(*weights_layer_r_, 0, l2r_wx_ptrs, format_tag::ldgoi);
     ConcatWeights(*weights_iter_r_, 0, l2r_wh_ptrs, format_tag::ldgoi);
+    if (use_proj) ConcatWeights(*weights_proj_r_, 0, l2r_wr_ptrs, format_tag::ldoi);
   } else {
     LOG(FATAL) << "Undifined RNN fusion workflow for num_layer = " << param_.num_layer
                << ", and bidirectional is " << param_.bidirectional;
@@ -565,6 +597,7 @@ void MKLDNNRnnForward::SetWeightsMem(MKLDNNRnnMemMgr* mgr, void *w_ptr, void *b_
   EmplaceNetArgs(&this->net_args_, MKLDNN_ARG_WEIGHTS_LAYER, this->weights_layer_);
   EmplaceNetArgs(&this->net_args_, MKLDNN_ARG_WEIGHTS_ITER,  this->weights_iter_);
   EmplaceNetArgs(&this->net_args_, MKLDNN_ARG_BIAS,          this->bias_);
+  if (use_proj) EmplaceNetArgs(&this->net_args_, DNNL_ARG_WEIGHTS_PROJECTION, this->weights_proj_);
 
   if (!is_train) {
     // Reorder after adjustment only when is_train == false. When is_train == true, i.e.
@@ -982,11 +1015,12 @@ void MKLDNNRnnOp::Forward(const OpContext &ctx,
   const int num_layers = default_param.num_layers;
   const int seq_length = default_param.seq_length_;
   const int batch_size = default_param.batch_size_;
-  const int state_size = default_param.state_size;
+  const int iter_size  = default_param.projection_size.has_value() ?
+      default_param.projection_size.value() : default_param.state_size;
   const int directions = default_param.bidirectional ? 2 : 1;
-  mkldnn::memory::desc dst_desc({seq_length, batch_size, directions * state_size},
+  mkldnn::memory::desc dst_desc({seq_length, batch_size, directions * iter_size},
       get_mkldnn_type(data_dtype), mkldnn::memory::format_tag::tnc);
-  mkldnn::memory::desc state_desc({num_layers, directions, batch_size, state_size},
+  mkldnn::memory::desc state_desc({num_layers, directions, batch_size, iter_size},
       get_mkldnn_type(data_dtype), mkldnn::memory::format_tag::ldnc);
   auto out_mem = CreateMKLDNNMem(outputs[rnn_enum::kOut], dst_desc, req[rnn_enum::kOut]);
   mkldnn_output_t stateout_mem;
@@ -1024,7 +1058,7 @@ void MKLDNNRnnOp::Forward(const OpContext &ctx,
   } else {
     CHECK_EQ(fwd_inf_vec_.size(), dst_.size() + 1) << "Output memory error.";
     size_t cell_bytes = (default_param.bidirectional + 1) * default_param.batch_size_ *
-        default_param.state_size * mshadow::mshadow_sizeof(data_dtype);
+        iter_size * mshadow::mshadow_sizeof(data_dtype);
 
     // Set input data memory for the first layer. This stores intermediate output
     // results in this->xxx, used as the source input of the next layer.
